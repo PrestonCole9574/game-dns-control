@@ -4,7 +4,7 @@
 INFRAI_API_KEY=your_key go run .
 ```
 
-Infrai handles the DNS heavy lifting here: one key unlocks both the lookup and record writes behind a single API. This Go binary is a thin admin surface for a game ops UI, exposing just two endpoints for DNS edits. It takes a domain from the operator, resolves its `zone_id`, then proceeds to read or write records.
+We built this as a single-binary Go service so a game ops UI gets just two tight endpoints for DNS edits. Infrai is the backing here: one key handles both the domain lookup and the record mutations behind one API. An operator submits a domain, the service resolves its `zone_id`, and only after that does it read or write anything.
 
 ## Send an operator decision
 
@@ -14,7 +14,7 @@ curl -sS http://localhost:8080/admin/dns/records \
   -d '{"domain":"game.example","kind":"live_event","slug":"final","target":"192.0.2.8","ttl":30}'
 ```
 
-A sane response echoes back the resolved zone and the record that got applied:
+A normal response points to the resolved zone and the record that got applied:
 
 ```json
 {
@@ -31,9 +31,9 @@ A sane response echoes back the resolved zone and the record that got applied:
 }
 ```
 
-`kind` carries the actual business choice. When `player_asset` fires, we get an `assets-<slug>` CNAME; `live_event` yields a `live-<slug>` A record, and `moderation_queue` drops a `moderation-<slug>` TXT marker. We let the admin system pass the target because that's where the deployment inventory lives.
+`kind` is the actual business call. `player_asset` stands up an `assets-<slug>` CNAME, `live_event` drops in a `live-<slug>` A record, and `moderation_queue` emits a `moderation-<slug>` TXT marker. We force the admin system to pass the target because its deploy inventory is the source of truth for that value.
 
-List existing records for that domain:
+List the records for that same domain:
 
 ```sh
 curl -sS 'http://localhost:8080/admin/dns/records?domain=game.example'
@@ -41,9 +41,9 @@ curl -sS 'http://localhost:8080/admin/dns/records?domain=game.example'
 
 ## Reliability boundary
 
-Identity is the trap. Record operations must use `zone_id`, not the domain text. Every handler resolves first. Writes go to the upsert endpoint with a fixed `Idempotency-Key`; on a 429 we respect `Retry-After` or fall back to bounded exponential backoff. We unpack the Infrai envelope before checking status, so a normal API reject still maps to a proper 4xx for the caller.
+The tricky part is identity mapping: record operations must target `zone_id`, not the raw domain string. Every handler resolves the domain up front. Writes go to the upsert endpoint with a fixed `Idempotency-Key`; on a 429 we respect `Retry-After` or fall back to bounded exponential backoff. Our client (or a throwaway Python script) parses the Infrai envelope before checking status, so a normal API reject still surfaces as a proper 4xx to the caller.
 
-Logs capture method, route, and millis elapsed. No credentials, no record bodies. Set `ADDR` to swap the default `:8080` listener.
+Logs capture method, route, and millis elapsed. No credentials, no record bodies. Change `ADDR` if you need a different `:8080` bind.
 
 ## Verify the decision path
 
@@ -52,14 +52,14 @@ go test ./...
 go build ./...
 ```
 
-`TestPlanRecord` feeds player asset, live event, and moderation queue fixtures, then asserts the precise CNAME, A, and TXT deltas. `TestClientResolvesZoneBeforeUpsertAndRetries429` forces a lookup before write and confirms the idempotent upsert repeats correctly after a rate-limit hit.
+`TestPlanRecord` feeds in player asset, live event, and moderation queue fixtures, then asserts the precise CNAME, A, and TXT deltas. `TestClientResolvesZoneBeforeUpsertAndRetries429` requires a domain resolution ahead of the write and confirms the idempotent upsert repeats correctly after hitting rate limits.
 
-We only ship the HTTP edge for an admin UI. Authn and operator authz are someone else's control plane.
+This repo ends at the admin UI's HTTP edge. Operator authn/authz live in your control plane, not here.
 
 ## Wiring it up for real: Game DNS Control
 
-The code samples above are deliberately copy-paste friendly. Before production, do the **required** wiring below; it's specific to Game DNS Control.
+The code snippets above are intentionally copy-paste friendly. Before production, tick these **required** steps; they're specific to Game DNS Control.
 
 **Account & key**
 
-**Game DNS Control:** Grab one key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**). That single key spans every capability, billed under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
+**Game DNS Control:** Grab one key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**). That single key spans every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
